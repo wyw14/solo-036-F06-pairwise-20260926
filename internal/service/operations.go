@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"github.com/wyw14/solo-036/internal/journal"
 	"github.com/wyw14/solo-036/internal/model"
@@ -18,3 +19,11 @@ func (r *Runtime) CreateOperation(station string) (model.Run, error) {
 }
 func (r *Runtime) Operations() []model.Run { return run.Active(r.Runs) }
 func (r *Runtime) JournalHealthy() bool    { return journal.Healthy(r.Journal) }
+
+func (r *Runtime) QueryJournalEvents(query journal.EventQuery) (journal.EventPage, error) {
+	control := r.ensureControl()
+	if control.Persistent == nil {
+		return journal.EventPage{}, errors.New("persistent journal is not configured")
+	}
+	return control.Persistent.Query(query)
+}
