@@ -52,7 +52,24 @@ func eventChecksum(sequence int64, previous string, event model.Event) (string, 
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func (s *FileStore) readRecords() ([]FileRecord, error) {
+// CorruptionError identifies the first record in the event log that fails
+// decoding or checksum-chain verification. Records before Sequence are
+// verified and safe to read; the record at Sequence and everything after
+// it cannot be trusted.
+type CorruptionError struct {
+	Sequence int64
+	Err      error
+}
+
+func (e *CorruptionError) Error() string { return e.Err.Error() }
+func (e *CorruptionError) Unwrap() error { return e.Err }
+
+// scanRecords reads the event log and verifies the checksum chain record
+// by record, returning the verified prefix. When the chain breaks, the
+// error is a *CorruptionError and the returned records are the verified
+// prefix; read failures that are not data corruption come back as plain
+// errors with no records.
+func (s *FileStore) scanRecords() ([]FileRecord, error) {
 	file, err := os.Open(s.eventsPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return []FileRecord{}, nil
@@ -68,6 +85,9 @@ func (s *FileStore) readRecords() ([]FileRecord, error) {
 	records := make([]FileRecord, 0)
 	var previous string
 	var expectedSequence int64 = 1
+	corrupt := func(err error) error {
+		return &CorruptionError{Sequence: expectedSequence, Err: err}
+	}
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		if len(line) == 0 {
@@ -75,20 +95,20 @@ func (s *FileStore) readRecords() ([]FileRecord, error) {
 		}
 		var record FileRecord
 		if err := json.Unmarshal(line, &record); err != nil {
-			return nil, fmt.Errorf("decode event record %d: %w", expectedSequence, err)
+			return records, corrupt(fmt.Errorf("decode event record %d: %w", expectedSequence, err))
 		}
 		if record.Sequence != expectedSequence {
-			return nil, fmt.Errorf("event sequence gap: got %d want %d", record.Sequence, expectedSequence)
+			return records, corrupt(fmt.Errorf("event sequence gap: got %d want %d", record.Sequence, expectedSequence))
 		}
 		if record.Previous != previous {
-			return nil, fmt.Errorf("event chain mismatch at sequence %d", record.Sequence)
+			return records, corrupt(fmt.Errorf("event chain mismatch at sequence %d", record.Sequence))
 		}
 		expectedChecksum, err := eventChecksum(record.Sequence, record.Previous, record.Event)
 		if err != nil {
 			return nil, err
 		}
 		if record.Checksum != expectedChecksum {
-			return nil, fmt.Errorf("event checksum mismatch at sequence %d", record.Sequence)
+			return records, corrupt(fmt.Errorf("event checksum mismatch at sequence %d", record.Sequence))
 		}
 		records = append(records, record)
 		previous = record.Checksum
@@ -96,6 +116,14 @@ func (s *FileStore) readRecords() ([]FileRecord, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan event log: %w", err)
+	}
+	return records, nil
+}
+
+func (s *FileStore) readRecords() ([]FileRecord, error) {
+	records, err := s.scanRecords()
+	if err != nil {
+		return nil, err
 	}
 	return records, nil
 }

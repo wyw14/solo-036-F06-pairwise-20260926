@@ -23,6 +23,7 @@ func NewRouter(runtime *service.Runtime) http.Handler {
 		r.Get("/equipment", h.Equipment)
 		r.Get("/interlocks", h.Interlocks)
 		r.Get("/incidents", h.Incidents)
+		r.Get("/events", h.Events)
 		r.Get("/snapshot", h.Snapshot)
 		r.Post("/snapshot", h.PersistSnapshot)
 		r.Get("/recovery/barrier", h.RecoveryBarrier)
